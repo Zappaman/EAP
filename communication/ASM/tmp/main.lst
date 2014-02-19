@@ -1,0 +1,2015 @@
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00001 ;**********************************************************************************************
+                      00002 ;                                                       BASIC INFORMATION ABOUT THIS PROGRAM
+                      00003 ;**********************************************************************************************
+                      00004 ;       File name:       main.asm
+                      00005 ;       Data:            21/09/2007
+                      00006 ;       Version:         02.00
+                      00007 ;       Company:         Melexis-Bulgaria(www.melexis.com)
+                      00008 ;       Description: Software SMBus implementation for MLX90614 using PIC18F4320
+                      00009 ;                                Language: Microchip Assembler
+                      00010 ;                            Fosc=11.0592MHz, Tcy=362ns
+                      00011 ;   Author:              Dimo petkov, dpv@melexis.com
+                      00012 ;**********************************************************************************************
+                      00013 ;                                                       DEFINE MCU TYPE AND INCLUDE HEADER FILES
+                      00014 ;**********************************************************************************************
+                      00015                                 LIST            p=18F4320
+                      00016                                 #include        <p18F4320.inc>
+                      00001         LIST
+                      00002 ; P18F4320.INC  Standard Header File, Version 1.0   Microchip Technology, Inc.
+                      01095         LIST
+                      00017                                 #include        "boot.inc"
+                      00001 ;----------------------------------------------------------------------------------------------
+                      00002 ;                                               Reserve EEPROM for bootloader
+                      00003 ;---------------------------------------------------------------------------------------------- 
+                      00004 
+                      00005 
+F000FE                00006                 org 0xF000FE            ;PIC18F4320 has 256 bytes EEPROM
+                      00007         
+F000FE 4466           00008                 DE 0x66,0x44                     
+                      00009                                          
+                      00010 ;----------------------------------------------------------------------------------------------
+                      00018                                 #include        "config.inc"
+                      00001 ;**********************************************************************************************
+                      00002 ;                                                                               CONFIGURATION BITS
+                      00003 ;**********************************************************************************************
+82 04 1E 81 81 0F 80 000004         CONFIG  OSC=HS,FSCM=OFF,IESO=ON
+       F A0 0F 00 
+                      00005         CONFIG  PWRT=ON,BOR=OFF,BORV=42
+                      00006         CONFIG  WDT=OFF
+                      00007         CONFIG  MCLRE=ON,PBAD=DIG,CCP2MX=C1
+                      00008         CONFIG  STVR=ON,LVP=OFF,DEBUG=OFF
+                      00009         CONFIG  CP0=OFF,CP1=OFF,CP2=OFF,CP3=OFF
+                      00010         CONFIG  CPB=ON,CPD=OFF
+                      00011         CONFIG  WRT0=OFF,WRT1=OFF,WRT2=OFF,WRT3=OFF
+                      00012         CONFIG  WRTC=OFF,WRTB=ON,WRTD=OFF
+                      00013         CONFIG  EBTR0=OFF,EBTR1=OFF,EBTR2=OFF,EBTR3=OFF
+                      00014         CONFIG  EBTRB=ON
+                      00019                                 #include        "GPRs.inc"
+                      00001 ;**********************************************************************************************
+                      00002 ;                                                        GPRs AND CONSTANTs DEFINITIONS
+                      00003 ;**********************************************************************************************
+                      00004                 
+                      00005                 CBLOCK  H'00'
+  00000000            00006                    WREG_temp                    ; Storage memory of WREG in ISRs with low priority
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+  00000001            00007                    STATUS_temp                  ; Storage memory of STATUS in ISRs with low priority
+  00000002            00008                    BSR_temp                             ; Storage memory of BSR in ISRs with low priorit
+                            y
+                      00009                    
+  00000003            00010                    counterU                             ;|
+  00000004            00011                    counterH                             ; > Registers used in delay subroutines
+  00000005            00012                    counterL                             ;|
+                      00013                            
+  00000006            00014                    TX_buffer                    ; Saves the byte which will be send on the SMBus 
+  00000007            00015                Bit_counter                      ; Register used in TX_byte and RX_byte subroutines
+  00000008            00016                    RX_buffer                    ; Save the byte received from the SMbus
+                      00017                    
+  00000009            00018                    flagreg0                             ; Defines user flags                    
+  0000000A            00019                    DataL                                ; Contains the low data byte read from MLX90614
+  0000000B            00020                    DataH                                ; Contains the high data byte read from MLX90614
+  0000000C            00021                    PecReg                               ; Contains the PEC byte read from MLX90614
+                      00022                    
+  0000000D            00023                    SlaveAddress                 ; Contains the device address
+  0000000E            00024                    command                              ; Contains the SMBus command
+  0000000F            00025                    Nack_Counter                 ; Defines the numbers of the  attempts one message to be
+                             sent in case of a failure 
+                      00026                    
+  00000010            00027                    PEC4                                 ;|
+  00000011            00028                    PEC3                                 ;|
+  00000012            00029                    PEC2                                 ;|
+  00000013            00030                    PEC1                                 ;|
+  00000014            00031                    PEC0                                 ;|
+  00000015            00032                    PEC                                  ;|
+  00000016            00033                    CRC4                                 ;|
+  00000017            00034                    CRC3                                 ; > Registers used in CRC8.asm file
+  00000018            00035                    CRC2                                 ;|
+  00000019            00036                    CRC1                                 ;|
+  0000001A            00037                    CRC0                                 ;|
+  0000001B            00038                    CRC                                  ;|
+  0000001C            00039                    BitPosition                  ;|
+  0000001D            00040                    shift                                ;|
+                      00041                    
+                      00042                 ENDC
+                      00043                 
+                      00044 ;delay constants
+                      00045 #define TBUF    d'5'                    ; Defines SMBus timings(Tbuf- bus free time between Stop and Sta
+                            rt condition)
+                      00046 
+                      00047 
+                      00048 ;SMBus control signals
+                      00049 #define _SCL_IO TRISC,3                 ; Defines SCL pin direction
+                      00050 #define _SDA_IO TRISC,4                 ; Defines SDA pin direction
+                      00051 #define _SCL    PORTC,3                 ; Defines SCL data pin
+                      00052 #define _SDA    PORTC,4                 ; Defines SDA data pin
+                      00053 
+                      00054 #define bit_out flagreg0,0              ; Contains the bit that will be send on the SDA line
+                      00055 #define bit_in  flagreg0,1              ; Contains the bit that is received on the SDA lina
+                      00056 
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00057 ;MLX90614 definitions
+                      00058 #define  RAM_Access    0x00             ; Define the MLX90614 command RAM_Accsess
+                      00059 #define  RAM_Tobj1         0x07         ; Define address from MLX90614 RAM memory  
+                      00060 #define  SA                0x00         ; Define SMBus device address
+                      00061 #define  DEFAULT_SA    0x5A             ; Define default SMBus device address
+                      00020                                 #include        "macros.inc"
+                      00001 ;**********************************************************************************************
+                      00002 ;                                                                                       MACROS
+                      00003 ;**********************************************************************************************
+                      00004 LoadNACKcounter MACRO
+                      00005 
+                      00006                                 MOVLW   D'0'
+                      00007                                 MOVWF   Nack_Counter
+                      00008                                 
+                      00009                                 ENDM
+                      00010 ;---------------------------------------------------------------------------------------------- 
+                      00011 _SDA_HIGH               macro
+                      00012                                 BSF             _SDA_IO                 ;_SDA-input,_SDA line is high fr
+                            om pull up
+                      00013                                 endm
+                      00014 ;----------------------------------------------------------------------------------------------
+                      00015 _SCL_HIGH               macro
+                      00016                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+                      00017                                 endm
+                      00018 ;----------------------------------------------------------------------------------------------
+                      00019 _SDA_LOW                macro
+                      00020                                 BCF             _SDA                    ;
+                      00021                                 BCF             _SDA_IO                 ;Put '0' on _SDA line
+                      00022                                 endm
+                      00023 ;----------------------------------------------------------------------------------------------
+                      00024 _SCL_LOW                macro
+                      00025                                 BCF             _SCL                    ;
+                      00026                                 BCF             _SCL_IO                 ;Put '0' on _SDA line
+                      00027                                 endm
+                      00028 ;----------------------------------------------------------------------------------------------
+                      00029 
+                      00021 ;**********************************************************************************************
+                      00022 ;                                                                               BEGINNING OF THE PROGRAM
+                      00023 ;**********************************************************************************************
+                      00024 
+  00000001            00025 TYPE_PICSTART=1         ;Bootloader not used
+  00000002            00026 TYPE_BOOTLOAD=2         ;Bootloader (http://members.rogers.com/martin.dubuc/Bootloader/) is used
+                      00027 
+                      00028                                         ;(http://mdubuc.freeshell.org/Colt/)
+                      00029 
+  00000002            00030 type_prog=2                     ;EQU THE PROGRAMMING TOOL HERE! - results in vectors' offEQU (e.g. reEQU
+                             0x0000 <-> 0x0200)
+                      00031 
+                      00032                                         IF type_prog == 2
+000000                00033                                                 ORG 0x0000
+                      00034                                                 #include "BLOAD_PM.asm" ;NB: EQU the last EEPROM address
+                             to 0xFF ! At the end of code...
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  4
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00001                                         SUBTITLE "Bootloader source code"
+                      00002 
+000000 D00C           00003         DATA 0xD00C        ;0C , D0
+000002 D0EE           00004         DATA 0xD0EE        ;EE , D0
+000004 FFFF           00005         DATA 0xFFFF        ;FF , FF
+000006 FFFF           00006         DATA 0xFFFF        ;FF , FF
+000008 D0FF           00007         DATA 0xD0FF        ;FF , D0
+00000A BE82           00008         DATA 0xBE82        ;82 , BE
+00000C D0F4           00009         DATA 0xD0F4        ;F4 , D0
+00000E 0004           00010         DATA 0x0004        ;04 , 00
+000010 AE82           00011         DATA 0xAE82        ;82 , AE
+000012 D7FE           00012         DATA 0xD7FE        ;FE , D7
+000014 0012           00013         DATA 0x0012        ;12 , 00
+000016 FFFF           00014         DATA 0xFFFF        ;FF , FF
+000018 D0FF           00015         DATA 0xD0FF        ;FF , D0
+00001A 6AA6           00016         DATA 0x6AA6        ;A6 , 6A
+00001C 68A9           00017         DATA 0x68A9        ;A9 , 68
+00001E 68AA           00018         DATA 0x68AA        ;AA , 68
+000020 80A6           00019         DATA 0x80A6        ;A6 , 80
+000022 4AA8           00020     DATA 0x4AA8        ;A8 , 4A
+000024 D005           00021         DATA 0xD005        ;05 , D0
+000026 4CA8           00022         DATA 0x4CA8        ;A8 , 4C
+000028 D0EB           00023         DATA 0xD0EB        ;EB , D0
+00002A 6E06           00024         DATA 0x6E06        ;06 , 6E
+00002C 0E31           00025         DATA 0x0E31        ;31 , 0E
+00002E 6ECD           00026         DATA 0x6ECD        ;CD , 6E
+000030 9C94           00027         DATA 0x9C94        ;94 , 9C
+000032 0E90           00028         DATA 0x0E90        ;90 , 0E
+000034 6EAB           00029         DATA 0x6EAB        ;AB , 6E
+000036 0E26           00030         DATA 0x0E26        ;26 , 0E
+000038 6EAC           00031         DATA 0x6EAC        ;AC , 6E
+00003A 98AB           00032         DATA 0x98AB        ;AB , 98
+00003C 0E03           00033         DATA 0x0E03        ;03 , 0E
+00003E 6ED5           00034         DATA 0x6ED5        ;D5 , 6E
+000040 6AD7           00035         DATA 0x6AD7        ;D7 , 6A
+000042 6AD6           00036         DATA 0x6AD6        ;D6 , 6A
+000044 D8D8           00037         DATA 0xD8D8        ;D8 , D8
+000046 8ED5           00038         DATA 0x8ED5        ;D5 , 8E
+000048 D8D6           00039         DATA 0xD8D6        ;D6 , D8
+00004A 9ED5           00040         DATA 0x9ED5        ;D5 , 9E
+00004C CFD6           00041         DATA 0xCFD6        ;D6 , CF
+00004E F003           00042         DATA 0xF003        ;03 , F0
+000050 32D7           00043         DATA 0x32D7        ;D7 , 32
+000052 3203           00044         DATA 0x3203        ;03 , 32
+000054 A0D8           00045         DATA 0xA0D8        ;D8 , A0
+000056 0603           00046         DATA 0x0603        ;03 , 06
+000058 C003           00047         DATA 0xC003        ;03 , C0
+00005A FFAF           00048         DATA 0xFFAF        ;AF , FF
+00005C 88AB           00049         DATA 0x88AB        ;AB , 88
+00005E 50AE           00050         DATA 0x50AE        ;AE , 50
+000060 50AE           00051         DATA 0x50AE        ;AE , 50
+000062 D8B6           00052         DATA 0xD8B6        ;B6 , D8
+000064 0A0F           00053         DATA 0x0A0F        ;0F , 0A
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  5
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+000066 E1E9           00054         DATA 0xE1E9        ;E9 , E1
+000068 EE00           00055         DATA 0xEE00        ;00 , EE
+00006A F008           00056         DATA 0xF008        ;08 , F0
+00006C 6A00           00057         DATA 0x6A00        ;00 , 6A
+00006E 6A01           00058         DATA 0x6A01        ;01 , 6A
+000070 D8AF           00059         DATA 0xD8AF        ;AF , D8
+000072 0A0F           00060         DATA 0x0A0F        ;0F , 0A
+000074 E0F6           00061         DATA 0xE0F6        ;F6 , E0
+000076 5004           00062         DATA 0x5004        ;04 , 50
+000078 0A04           00063         DATA 0x0A04        ;04 , 0A
+00007A E00A           00064         DATA 0xE00A        ;0A , E0
+00007C 5004           00065         DATA 0x5004        ;04 , 50
+00007E 0A05           00066         DATA 0x0A05        ;05 , 0A
+000080 E101           00067         DATA 0xE101        ;01 , E1
+000082 D8A6           00068         DATA 0xD8A6        ;A6 , D8
+000084 5004           00069         DATA 0x5004        ;04 , 50
+000086 2600           00070         DATA 0x2600        ;00 , 26
+000088 6EEE           00071         DATA 0x6EEE        ;EE , 6E
+00008A 4E01           00072         DATA 0x4E01        ;01 , 4E
+00008C D7D6           00073         DATA 0xD7D6        ;D6 , D7
+00008E D7F0           00074         DATA 0xD7F0        ;F0 , D7
+000090 5200           00075         DATA 0x5200        ;00 , 52
+000092 E1D3           00076         DATA 0xE1D3        ;D3 , E1
+000094 90CD           00077         DATA 0x90CD        ;CD , 90
+000096 500A           00078         DATA 0x500A        ;0A , 50
+000098 6EF6           00079         DATA 0x6EF6        ;F6 , 6E
+00009A 6EA9           00080         DATA 0x6EA9        ;A9 , 6E
+00009C 500B           00081         DATA 0x500B        ;0B , 50
+00009E 6EF7           00082         DATA 0x6EF7        ;F7 , 6E
+0000A0 6EAA           00083         DATA 0x6EAA        ;AA , 6E
+0000A2 C00C           00084         DATA 0xC00C        ;0C , C0
+0000A4 FFF8           00085         DATA 0xFFF8        ;F8 , FF
+0000A6 EE00           00086         DATA 0xEE00        ;00 , EE
+0000A8 F00D           00087         DATA 0xF00D        ;0D , F0
+0000AA 5009           00088         DATA 0x5009        ;09 , 50
+0000AC 6E01           00089         DATA 0x6E01        ;01 , 6E
+0000AE B4D8           00090         DATA 0xB4D8        ;D8 , B4
+0000B0 00FF           00091         DATA 0x00FF        ;FF , 00
+0000B2 5008           00092         DATA 0x5008        ;08 , 50
+0000B4 0808           00093         DATA 0x0808        ;08 , 08
+0000B6 E3C1           00094         DATA 0xE3C1        ;C1 , E3
+0000B8 6AFA           00095         DATA 0x6AFA        ;FA , 6A
+0000BA 6AFB           00096         DATA 0x6AFB        ;FB , 6A
+0000BC 4408           00097         DATA 0x4408        ;08 , 44
+0000BE 26F9           00098         DATA 0x26F9        ;F9 , 26
+0000C0 D008           00099         DATA 0xD008        ;08 , D0
+0000C2 D01E           00100         DATA 0xD01E        ;1E , D0
+0000C4 D025           00101         DATA 0xD025        ;25 , D0
+0000C6 D034           00102         DATA 0xD034        ;34 , D0
+0000C8 D03E           00103         DATA 0xD03E        ;3E , D0
+0000CA D048           00104         DATA 0xD048        ;48 , D0
+0000CC D019           00105         DATA 0xD019        ;19 , D0
+0000CE D052           00106         DATA 0xD052        ;52 , D0
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  6
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0000D0 00FF           00107         DATA 0x00FF        ;FF , 00
+0000D2 50EE           00108         DATA 0x50EE        ;EE , 50
+0000D4 02AF           00109         DATA 0x02AF        ;AF , 02
+0000D6 46F4           00110         DATA 0x46F4        ;F4 , 46
+0000D8 46F4           00111         DATA 0x46F4        ;F4 , 46
+0000DA 0EFC           00112         DATA 0x0EFC        ;FC , 0E
+0000DC 16F4           00113         DATA 0x16F4        ;F4 , 16
+0000DE 46F3           00114         DATA 0x46F3        ;F3 , 46
+0000E0 46F3           00115         DATA 0x46F3        ;F3 , 46
+0000E2 0E03           00116         DATA 0x0E03        ;03 , 0E
+0000E4 14F3           00117         DATA 0x14F3        ;F3 , 14
+0000E6 24F4           00118         DATA 0x24F4        ;F4 , 24
+0000E8 6EA8           00119         DATA 0x6EA8        ;A8 , 6E
+0000EA 0E04           00120         DATA 0x0E04        ;04 , 0E
+0000EC 6EA6           00121         DATA 0x6EA6        ;A6 , 6E
+0000EE D878           00122         DATA 0xD878        ;78 , D8
+0000F0 B2A6           00123         DATA 0xB2A6        ;A6 , B2
+0000F2 D7FE           00124         DATA 0xD7FE        ;FE , D7
+0000F4 0E0C           00125         DATA 0x0E0C        ;0C , 0E
+0000F6 6E0A           00126         DATA 0x6E0A        ;0A , 6E
+0000F8 0E00           00127         DATA 0x0E00        ;00 , 0E
+0000FA 6E0B           00128         DATA 0x6E0B        ;0B , 6E
+0000FC 0E04           00129         DATA 0x0E04        ;04 , 0E
+0000FE D045           00130         DATA 0xD045        ;45 , D0
+                      00131 
+000100 0009           00132         DATA 0x0009        ;09 , 00
+000102 CFF5           00133         DATA 0xCFF5        ;F5 , CF
+000104 FFEE           00134         DATA 0xFFEE        ;EE , FF
+000106 2E01           00135         DATA 0x2E01        ;01 , 2E
+000108 D7FB           00136         DATA 0xD7FB        ;FB , D7
+00010A 5009           00137         DATA 0x5009        ;09 , 50
+00010C 0F05           00138         DATA 0x0F05        ;05 , 0F
+00010E D03D           00139         DATA 0xD03D        ;3D , D0
+000110 0EF8           00140         DATA 0x0EF8        ;F8 , 0E
+000112 16F6           00141         DATA 0x16F6        ;F6 , 16
+000114 0E08           00142         DATA 0x0E08        ;08 , 0E
+000116 CFEE           00143         DATA 0xCFEE        ;EE , CF
+000118 FFF5           00144         DATA 0xFFF5        ;F5 , FF
+00011A 000D           00145         DATA 0x000D        ;0D , 00
+00011C 2EE8           00146         DATA 0x2EE8        ;E8 , 2E
+00011E D7FB           00147         DATA 0xD7FB        ;FB , D7
+000120 000A           00148         DATA 0x000A        ;0A , 00
+000122 0E84           00149         DATA 0x0E84        ;84 , 0E
+000124 6EA6           00150         DATA 0x6EA6        ;A6 , 6E
+000126 D85C           00151         DATA 0xD85C        ;5C , D8
+000128 0009           00152         DATA 0x0009        ;09 , 00
+00012A 2E01           00153         DATA 0x2E01        ;01 , 2E
+00012C D7F1           00154         DATA 0xD7F1        ;F1 , D7
+00012E D02C           00155         DATA 0xD02C        ;2C , D0
+000130 0E94           00156         DATA 0x0E94        ;94 , 0E
+000132 6EA6           00157         DATA 0x6EA6        ;A6 , 6E
+000134 D855           00158         DATA 0xD855        ;55 , D8
+000136 0E40           00159         DATA 0x0E40        ;40 , 0E
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  7
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+000138 26F6           00160         DATA 0x26F6        ;F6 , 26
+00013A 6AE8           00161         DATA 0x6AE8        ;E8 , 6A
+00013C 22F7           00162         DATA 0x22F7        ;F7 , 22
+00013E 22F8           00163         DATA 0x22F8        ;F8 , 22
+000140 2E01           00164         DATA 0x2E01        ;01 , 2E
+000142 D7F6           00165         DATA 0xD7F6        ;F6 , D7
+000144 D021           00166         DATA 0xD021        ;21 , D0
+000146 6AA6           00167         DATA 0x6AA6        ;A6 , 6A
+000148 80A6           00168         DATA 0x80A6        ;A6 , 80
+00014A CFA8           00169         DATA 0xCFA8        ;A8 , CF
+00014C FFEE           00170         DATA 0xFFEE        ;EE , FF
+00014E 4AA9           00171         DATA 0x4AA9        ;A9 , 4A
+000150 2AAA           00172         DATA 0x2AAA        ;AA , 2A
+000152 2E01           00173         DATA 0x2E01        ;01 , 2E
+000154 D7F8           00174         DATA 0xD7F8        ;F8 , D7
+000156 5009           00175         DATA 0x5009        ;09 , 50
+000158 0F05           00176         DATA 0x0F05        ;05 , 0F
+00015A D017           00177         DATA 0xD017        ;17 , D0
+00015C CFEE           00178         DATA 0xCFEE        ;EE , CF
+00015E FFA8           00179         DATA 0xFFA8        ;A8 , FF
+000160 0E04           00180         DATA 0x0E04        ;04 , 0E
+000162 6EA6           00181         DATA 0x6EA6        ;A6 , 6E
+000164 D83D           00182         DATA 0xD83D        ;3D , D8
+000166 B2A6           00183         DATA 0xB2A6        ;A6 , B2
+000168 D7FE           00184         DATA 0xD7FE        ;FE , D7
+00016A 4AA9           00185         DATA 0x4AA9        ;A9 , 4A
+00016C 2AAA           00186         DATA 0x2AAA        ;AA , 2A
+00016E 2E01           00187         DATA 0x2E01        ;01 , 2E
+000170 D7F5           00188         DATA 0xD7F5        ;F5 , D7
+000172 D00A           00189         DATA 0xD00A        ;0A , D0
+000174 0EC4           00190         DATA 0x0EC4        ;C4 , 0E
+000176 6EA6           00191         DATA 0x6EA6        ;A6 , 6E
+000178 CFEE           00192         DATA 0xCFEE        ;EE , CF
+00017A FFF5           00193         DATA 0xFFF5        ;F5 , FF
+00017C 000C           00194         DATA 0x000C        ;0C , 00
+00017E D830           00195         DATA 0xD830        ;30 , D8
+000180 0009           00196         DATA 0x0009        ;09 , 00
+000182 2E01           00197         DATA 0x2E01        ;01 , 2E
+000184 D7F7           00198         DATA 0xD7F7        ;F7 , D7
+000186 D000           00199         DATA 0xD000        ;00 , D0
+000188 0E01           00200         DATA 0x0E01        ;01 , 0E
+00018A 6E01           00201         DATA 0x6E01        ;01 , 6E
+00018C 0E0F           00202         DATA 0x0E0F        ;0F , 0E
+00018E D81B           00203         DATA 0xD81B        ;1B , D8
+000190 D81A           00204         DATA 0xD81A        ;1A , D8
+000192 6A00           00205         DATA 0x6A00        ;00 , 6A
+000194 EE00           00206         DATA 0xEE00        ;00 , EE
+000196 F008           00207         DATA 0xF008        ;08 , F0
+000198 50EE           00208         DATA 0x50EE        ;EE , 50
+00019A 2600           00209         DATA 0x2600        ;00 , 26
+00019C D808           00210         DATA 0xD808        ;08 , D8
+00019E 2E01           00211         DATA 0x2E01        ;01 , 2E
+0001A0 D7FB           00212         DATA 0xD7FB        ;FB , D7
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  8
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0001A2 6C00           00213         DATA 0x6C00        ;00 , 6C
+0001A4 5000           00214         DATA 0x5000        ;00 , 50
+0001A6 D803           00215         DATA 0xD803        ;03 , D8
+0001A8 0E04           00216         DATA 0x0E04        ;04 , 0E
+0001AA D80D           00217         DATA 0xD80D        ;0D , D8
+0001AC D746           00218         DATA 0xD746        ;46 , D7
+0001AE 6E05           00219         DATA 0x6E05        ;05 , 6E
+0001B0 0A0F           00220         DATA 0x0A0F        ;0F , 0A
+0001B2 E006           00221         DATA 0xE006        ;06 , E0
+0001B4 5005           00222         DATA 0x5005        ;05 , 50
+0001B6 0A04           00223         DATA 0x0A04        ;04 , 0A
+0001B8 E003           00224         DATA 0xE003        ;03 , E0
+0001BA 5005           00225         DATA 0x5005        ;05 , 50
+0001BC 0A05           00226         DATA 0x0A05        ;05 , 0A
+0001BE E102           00227         DATA 0xE102        ;02 , E1
+0001C0 0E05           00228         DATA 0x0E05        ;05 , 0E
+0001C2 D801           00229         DATA 0xD801        ;01 , D8
+0001C4 5005           00230         DATA 0x5005        ;05 , 50
+0001C6 0004           00231         DATA 0x0004        ;04 , 00
+0001C8 A89E           00232         DATA 0xA89E        ;9E , A8
+0001CA D7FE           00233         DATA 0xD7FE        ;FE , D7
+0001CC 6EAD           00234         DATA 0x6EAD        ;AD , 6E
+0001CE 0012           00235         DATA 0x0012        ;12 , 00
+0001D0 0004           00236         DATA 0x0004        ;04 , 00
+0001D2 B2AB           00237         DATA 0xB2AB        ;AB , B2
+0001D4 00FF           00238         DATA 0x00FF        ;FF , 00
+0001D6 AA9E           00239         DATA 0xAA9E        ;9E , AA
+0001D8 D7FE           00240         DATA 0xD7FE        ;FE , D7
+0001DA 50AE           00241         DATA 0x50AE        ;AE , 50
+0001DC 6E04           00242         DATA 0x6E04        ;04 , 6E
+0001DE 0012           00243         DATA 0x0012        ;12 , 00
+0001E0 0004           00244         DATA 0x0004        ;04 , 00
+0001E2 0E55           00245         DATA 0x0E55        ;55 , 0E
+0001E4 6EA7           00246         DATA 0x6EA7        ;A7 , 6E
+0001E6 0EAA           00247         DATA 0x0EAA        ;AA , 0E
+0001E8 6EA7           00248         DATA 0x6EA7        ;A7 , 6E
+0001EA 82A6           00249         DATA 0x82A6        ;A6 , 82
+0001EC 0000           00250         DATA 0x0000        ;00 , 00
+0001EE 0012           00251         DATA 0x0012        ;12 , 00
+0001F0 FFFF           00252         DATA 0xFFFF        ;FF , FF
+0001F2 FFFF           00253         DATA 0xFFFF        ;FF , FF
+0001F4 FFFF           00254         DATA 0xFFFF        ;FF , FF
+0001F6 A09E           00255         DATA 0xA09E        ;9E , A0
+0001F8 D708           00256         DATA 0xD708        ;08 , D7
+0001FA 909E           00257         DATA 0x909E        ;9E , 90
+0001FC 2E06           00258         DATA 0x2E06        ;06 , 2E
+0001FE D705           00259         DATA 0xD705        ;05 , D7
+                      00260 
+000200                00035                                                 ORG 0x0200      ;revised in order to add bootloader, htt
+                            p://members.rogers.com/martin.dubuc/Bootloader/
+                      00036                                         ELSE
+                      00037                                                 ORG 0x0000
+                      00038                                         ENDIF   
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE  9
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00039                                         
+                      00040                                                         
+                      00041         
+000200 EF9D F002      00042         GOTO    MAIN    ;JUMP TO MAIN PROGRAM 
+                      00043                 
+                      00044 ;**********************************************************************************************
+                      00045 ;                                                                       INTERRUPT SERVISE ROUTINES      
+                                    
+                      00046 ;**********************************************************************************************
+                      00047                                         IF type_prog == 2
+000208                00048                                                 ORG     0x00208
+                      00049                                         ELSE
+                      00050                                                 ORG     0x00008
+                      00051                                         ENDIF
+000208 EF0E F001      00052         GOTO    isr_high                
+                      00053 
+                      00054                                         IF type_prog == 2
+000218                00055                                                 ORG     0x00218
+                      00056                                         ELSE
+                      00057                                                 ORG     0x00018
+                      00058                                         ENDIF
+000218 EF0F F001      00059         GOTO    isr_low
+                      00060         
+                      00061 ;------------------------HIGH PRIORITY LEVEL    INTERRUPT SERVISE ROUTINE---------------------
+00021C                00062 isr_high
+                      00063 ;Check for low interrupt source
+                      00064 ;..............
+00021C 0011           00065         RETFIE  FAST                                    ;If interrupt source is different go out
+                      00066         
+                      00067 
+                      00068         
+                      00069 ;-------------------------LOW PRIORITY LEVEL    INTERRUPT SERVISE ROUTINE----------------------         
+                                    
+00021E                00070 isr_low
+                      00071 
+00021E 6E00           00072         MOVWF   WREG_temp                               ;| 
+000220 CFD8 F001      00073         MOVFF   STATUS, STATUS_temp     ; > Save STATUS, WREG and BSR register in RAM
+000224 CFE0 F002      00074         MOVFF   BSR, BSR_temp                   ;| 
+                      00075         
+                      00076 ;Check for low interrupt source
+                      00077 ;...........
+000228 0010           00078         RETFIE                                                  ;If interrupt source is different go out
+                      00079         
+00022A                00080 isr_low_end
+                      00081         
+00022A C002 FFE0      00082     MOVFF        BSR_temp,BSR                   ;|
+00022E 5000           00083         MOVF     WREG_temp,W                    ; > Restore BSR,WREG,STATUS
+000230 C001 FFD8      00084         MOVFF    STATUS_temp,STATUS     ;|
+                      00085         
+000234 0010           00086         RETFIE
+                      00087                         
+                      00088         
+                      00089 ;**********************************************************************************************
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 10
+
+Bootloader source code
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00090 ;                                                                                       SUBROUTINES     
+                                    
+                      00091 ;**********************************************************************************************
+                      00092 #include "MemoryAccess.asm"
+                      00001 
+                      00002                                         SUBTITLE "MLX90614 RAM Memory Access Subroutines"
+                      00003 
+                      00004 ;**********************************************************************************************
+                      00005 ;                                                       Read MLX90614 RAM address subroutine
+                      00006 ;**********************************************************************************************
+                      00007 ;Name:          MemRead
+                      00008 ;Function:      Read specified RAM address of a MLX90614 module
+                      00009 ;Input:         SlaveAddress,command=RAM_Address(EE_Address) | RAM_Access(EE_Address)
+                      00010 ;Output:        DataH:DataL
+                      00011 ;Comments:      Refer to AN "SMBus communication with MLX90614"
+                      00012 ;                       If receiver doesn’t answer with ACK, the number of the attempts to be send will 
+                            be  
+                      00013 ;                       equal  of the unsigned value in Nack_Counter-1 
+                      00014 ;**********************************************************************************************
+000236                00015 MemRead
+                      00016         LoadNACKcounter                         ; Set Nack_Counter
+                          M 
+000236 0E00               M                                 MOVLW   D'0'
+000238 6E0F               M                                 MOVWF   Nack_Counter
+                          M                                 
+00023A                00017 restart
+00023A EC75 F001      00018         CALL    STOP_bit                        ; STOP SMBus communication
+00023E 060F           00019         DECF    Nack_Counter,F          ; If((Nack_Counter-1) == 0) stop transmission
+000240 E101           00020         BNZ             start                           ; Else start transmission                       
+                                            
+000242 0012           00021         RETURN                                          ; Go out
+                      00022         
+000244                00023 start                   
+000244 EC62 F001      00024         CALL    START_bit                       ; Start SMBus comunication
+                      00025         
+000248 500D           00026         MOVF    SlaveAddress,W          ;|
+00024A 6E06           00027         MOVWF   TX_buffer                       ; > Send Slave address(Bit R/-W no meaning)
+00024C EC85 F001      00028         CALL    TX_byte                         ;|
+                      00029 
+000250 0B01           00030         ANDLW   0x01                            ; W & 0x01 -> W
+000252 A4D8           00031         BTFSS   STATUS,Z                        ; If Slave acknowledge,continue 
+000254 EF1D F001      00032         GOTO    restart                         ; Else restart communication
+                      00033 
+000258 500E           00034         MOVF    command,W                       ;|
+00025A 6E06           00035         MOVWF   TX_buffer                       ; > Send Command
+00025C EC85 F001      00036         CALL    TX_byte                         ;|
+                      00037         
+000260 0B01           00038         ANDLW   0x01                            ; W & 0x01 -> W
+000262 A4D8           00039         BTFSS   STATUS,Z                        ; If Slave acknowledge,continue 
+000264 EF1D F001      00040         GOTO    restart                         ; Else restart communication
+                      00041         
+000268 EC62 F001      00042         CALL    START_bit                       ; Send Repeated START bit
+                      00043         
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 11
+
+MLX90614 RAM Memory Access Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00026C 500D           00044         MOVF    SlaveAddress,W          ;|
+00026E 6E06           00045         MOVWF   TX_buffer                       ; > Send Slave address again(Bit R/-W no meaning)
+000270 EC85 F001      00046         CALL    TX_byte                         ;|
+                      00047         
+000274 0B01           00048         ANDLW   0x01                            ; W & 0x01 -> W
+000276 A4D8           00049         BTFSS   STATUS,Z                        ; If Slave acknowledge,continue 
+000278 EF1D F001      00050         GOTO    restart                         ; Else restart communication
+                      00051         
+00027C 9009           00052         BCF             bit_out                         ; Master must send acknowledge after this receiv
+                            ed byte
+00027E ECB2 F001      00053         CALL    RX_byte                         ; Receive low data byte
+000282 C008 F00A      00054         MOVFF   RX_buffer,DataL         ; Save it in DataL
+                      00055         
+000286 9009           00056         BCF             bit_out                         ; Master must send acknowledge after this receiv
+                            ed byte
+000288 ECB2 F001      00057         CALL    RX_byte                         ; Receive high data byte
+00028C C008 F00B      00058         MOVFF   RX_buffer,DataH         ; Save it in DataH
+                      00059         
+000290 8009           00060         BSF             bit_out                         ; Master not need to send acknowledge after this
+                             received byte
+000292 ECB2 F001      00061         CALL    RX_byte                         ; Receive PEC byte
+000296 C008 F00C      00062         MOVFF   RX_buffer,PecReg        ; Save it in PecReg
+                      00063         
+00029A EC75 F001      00064         CALL    STOP_bit                        ; Stop SMBus comunication
+                      00065         
+                      00066         
+00029E 500D           00067         MOVF    SlaveAddress,W          ;|
+0002A0 6E10           00068         MOVWF   PEC4                            ;|
+0002A2 C00E F011      00069         MOVFF   command,PEC3            ;|
+0002A6 500D           00070     MOVF        SlaveAddress,W          ; > Load PEC3:PEC2:PEC1:PEC0:PEC
+0002A8 6E12           00071         MOVWF   PEC2                            ;|
+0002AA C00A F013      00072         MOVFF   DataL,PEC1                      ;|
+0002AE C00B F014      00073         MOVFF   DataH,PEC0                      ;|
+0002B2 6A15           00074         CLRF    PEC                                     ;|
+                      00075         
+0002B4 ECD8 F001      00076         CALL    PEC_calculation         ; Result is in PEC
+0002B8 500C           00077         MOVF    PecReg,W                        ; PecReg -> WREG
+0002BA 1815           00078         XORWF   PEC,W                           ; PEC xor WREG ->WREG
+0002BC A4D8           00079         BTFSS   STATUS,Z                        ; If PEC=PecReg go out
+0002BE EF1D F001      00080         GOTO    restart                         ; Else repeat all transmission
+                      00081         
+0002C2 0012           00082         RETURN
+                      00083 
+                      00084 
+                      00085         
+                      00093 #include "SMBusSubr.asm"
+                      00001 ;**********************************************************************************************         
+                                                    
+                      00002                                                 SUBTITLE        "SMBus Comunication Subroutines"  
+                      00003 ;**********************************************************************************************
+                      00004 ;**********************************************************************************************
+                      00005 ;                                                                       START CONDITION ON SMBus        
+                      00006 ;**********************************************************************************************
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 12
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00007 ;Name:          START_bit
+                      00008 ;Function:      Generate START condition on SMBus
+                      00009 ;Input:         No
+                      00010 ;Output:        No
+                      00011 ;Comments:  Refer to "System Managment BUS(SMBus) specification Version 2.0" and
+                      00012 ;                       AN "SMBus communication with MLX90614"
+                      00013 ;**********************************************************************************************
+0002C4                00014 START_bit
+                      00015         
+                      00016         _SDA_HIGH                       ;Set SDA line
+0002C4 8894               M                                 BSF             _SDA_IO                 ;_SDA-input,_SDA line is high fr
+                            om pull up
+0002C6 0E05           00017         MOVLW   TBUF            ;Wait a few us
+0002C8 EC7F F002      00018         CALL    delay           ;
+                      00019         _SCL_HIGH                       ;Set SCL line
+0002CC 8694               M                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+                      00020         
+0002CE 0E05           00021         MOVLW   TBUF            ;Generate bus free time between Stop
+0002D0 EC7F F002      00022         CALL    delay           ;and Start condition (Tbuf=4.7us min)
+                      00023                 
+                      00024         _SDA_LOW                        ;Clear SDA line
+0002D4 9882               M                                 BCF             _SDA                    ;
+0002D6 9894               M                                 BCF             _SDA_IO                 ;Put '0' on _SDA line
+0002D8 0E05           00025         MOVLW   TBUF            ;Hold time after (Repeated) Start
+0002DA EC7F F002      00026     CALL        delay           ;Condition. After this period, the first clock is generated.
+                      00027                                         ;(Thd:sta=4.0us min)
+                      00028     _SCL_LOW                    ;Clear SCL line
+0002DE 9682               M                                 BCF             _SCL                    ;
+0002E0 9694               M                                 BCF             _SCL_IO                 ;Put '0' on _SDA line
+0002E2 0E05           00029         MOVLW   TBUF            ;
+0002E4 EC7F F002      00030         CALL    delay           ;Wait   
+                      00031                                                                                 
+0002E8 0012           00032     RETURN                                                                                              
+                                    
+                      00033 ;**********************************************************************************************
+                      00034 ;                                                                       STOP CONDITION ON SMBus 
+                      00035 ;**********************************************************************************************
+                      00036 ;Name:          STOPbit
+                      00037 ;Function:      Generate STOP condition on SMBus
+                      00038 ;Input:         No
+                      00039 ;Output:        No
+                      00040 ;Comments:  Refer to "System Managment BUS(SMBus) specification Version 2.0" and
+                      00041 ;                       AN "SMBus communication with MLX90614"
+                      00042 ;********************************************************************************************** 
+0002EA                00043 STOP_bit
+                      00044 
+                      00045         _SCL_LOW                                ;Clear SCL line
+0002EA 9682               M                                 BCF             _SCL                    ;
+0002EC 9694               M                                 BCF             _SCL_IO                 ;Put '0' on _SDA line
+0002EE 0E05           00046         MOVLW   TBUF                    ;Wait a few microseconds
+0002F0 EC7F F002      00047         CALL    delay                   ;
+                      00048         _SDA_LOW                                ;Clear SDA line
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 13
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0002F4 9882               M                                 BCF             _SDA                    ;
+0002F6 9894               M                                 BCF             _SDA_IO                 ;Put '0' on _SDA line
+                      00049         
+0002F8 0E05           00050         MOVLW   TBUF                    ;
+0002FA EC7F F002      00051         CALL    delay                   ;Wait
+                      00052         
+                      00053         _SCL_HIGH                               ;Set SCL line                   
+0002FE 8694               M                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+000300 0E05           00054         MOVLW   TBUF            ;Stop condition setup time 
+000302 EC7F F002      00055         CALL    delay           ;(Tsu:sto=4.0us min)
+                      00056         _SDA_HIGH                               ;Set SDA line
+000306 8894               M                                 BSF             _SDA_IO                 ;_SDA-input,_SDA line is high fr
+                            om pull up
+                      00057         
+                      00058         
+000308 0012           00059         RETURN                                                                                          
+                                    
+                      00060 ;**********************************************************************************************
+                      00061 ;                                                                       TRANSMIT DATA ON SMBus  
+                      00062 ;**********************************************************************************************
+                      00063 ;Name:          TX_byte
+                      00064 ;Function:      Send a byte on SMBus
+                      00065 ;Input:         TX_buffer
+                      00066 ;Output:        WREG - contains acknowledge value, 0 for ACK and 1 for NACK
+                      00067 ;Comments:   
+                      00068 ;**********************************************************************************************
+00030A                00069 TX_byte
+00030A 6E06           00070         MOVWF   TX_buffer
+00030C 0E08           00071         MOVLW   D'8'
+00030E 6E07           00072         MOVWF   Bit_counter                     ; Load Bit_counter
+000310                00073 tx_loop
+000310 9009           00074         BCF             bit_out                         ; 0 -> bit_out
+000312 3606           00075         RLCF    TX_buffer,F                     ; Tx_buffer<MSb> -> C
+000314 B0D8           00076         BTFSC   STATUS,C                        ; C is 0 or 1?  If C=0 don’t set bit_out
+000316 8009           00077         BSF             bit_out                         ; 1 -> bit_out
+000318 EC96 F001      00078         CALL    Send_bit                        ; Send bit_out   on SDA line
+00031C 2E07           00079         DECFSZ  Bit_counter,F           ; All 8th bits are sent? If not, send next bit ,else check for 
+                      00080                                             ; acknowledgement from the receiver
+00031E EF88 F001      00081         GOTO    tx_loop                         ; Send next bit
+000322 ECC1 F001      00082         CALL    Receive_bit                     ; Check for acknowledgement from the receiver
+000326 A209           00083         BTFSS   bit_in                          ; Receiver send ACK?
+000328 0C00           00084         RETLW   0                                       ; Yes,return 0
+00032A 0C01           00085         RETLW   1                                       ; No ,return 1
+                      00086 
+                      00087 ;----------------------------------------------------------------------------------------------    
+00032C                00088 Send_bit
+00032C B009           00089         BTFSC   bit_out                         ;|
+00032E EF9D F001      00090         GOTO    bit_high                        ;|
+                      00091         _SDA_LOW                                        ;|      
+000332 9882               M                                 BCF             _SDA                    ;
+000334 9894               M                                 BCF             _SDA_IO                 ;Put '0' on _SDA line
+000336 EF9F F001      00092         GOTO    clock                           ; > Send bit on SDA line
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 14
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00033A                00093 bit_high                                                ;|
+                      00094          _SDA_HIGH                                      ;|
+00033A 8894               M                                 BSF             _SDA_IO                 ;_SDA-input,_SDA line is high fr
+                            om pull up
+00033C 0000           00095         NOP                                                     ;|
+00033E                00096 clock                                                   
+                      00097         _SCL_HIGH                                       ;|
+00033E 8694               M                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+000340 0000           00098         NOP                                                     ;|
+000342 0000           00099         NOP                                                     ;|
+000344 0000           00100         NOP                                                     ;|
+000346 0000           00101         NOP                                                     ;|
+000348 0000           00102         NOP                                                     ;|
+00034A 0000           00103         NOP                                                     ;|
+00034C 0000           00104         NOP                                                     ;|
+00034E 0000           00105         NOP                                                     ; > Send clock pulse
+000350 0000           00106         NOP                                                     ;|
+000352 0000           00107         NOP                                                     ;|
+000354 0000           00108         NOP                                                     ;|
+000356 0000           00109         NOP                                                     ;| 
+000358 0000           00110         NOP                                                     ;|
+                      00111         _SCL_LOW                                        ;|
+00035A 9682               M                                 BCF             _SCL                    ;
+00035C 9694               M                                 BCF             _SCL_IO                 ;Put '0' on _SDA line
+00035E 0000           00112         NOP                                                     ;|
+000360 0000           00113         NOP                                                     ;|
+000362 0012           00114         RETURN  
+                      00115 ;**********************************************************************************************
+                      00116 ;                                                                       RECEIVE DATA ON SMBus   
+                      00117 ;**********************************************************************************************
+                      00118 ;Name:          RX_byte
+                      00119 ;Function:      Receive a byte on SMBus
+                      00120 ;Input:         No
+                      00121 ;Output:        RX_buffer(Received byte),bit_in(acknowledge bit)
+                      00122 ;Comments:  
+                      00123 ;**********************************************************************************************
+000364                00124 RX_byte
+000364 6A08           00125         CLRF    RX_buffer               ;Clear the receiving buffer
+000366 0E08           00126         MOVLW   D'8'
+000368 6E07           00127         MOVWF   Bit_counter             ;Load Bit_counter
+00036A 90D8           00128         BCF             STATUS,C                ;C=0
+00036C                00129 RX_again
+00036C 3608           00130         RLCF    RX_buffer,F             ;RX_buffer< MSb> -> C
+00036E ECC1 F001      00131         CALL    Receive_bit             ;Check bit on SDA line  
+000372 B209           00132         BTFSC   bit_in                  ;If received bit is ‘1’ set RX_buffer<LSb>
+000374 8008           00133         BSF             RX_buffer,0             ;Set RX_buffer<LSb>
+000376 2E07           00134         DECFSZ  Bit_counter,F   ;ALL 8th bis are received? If no receive next bit
+000378 EFB6 F001      00135         GOTO    RX_again                ;Receive next bit
+00037C EC96 F001      00136         CALL    Send_bit                ;Send NACK or ACK
+000380 0012           00137         RETURN                                  ;End of “RX_byte”
+                      00138 ;---------------------------------------------------------------------------------------------- 
+000382                00139 Receive_bit
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 15
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+000382 8209           00140         BSF             bit_in                  ;Set bit_in
+000384 8894           00141         BSF             _SDA_IO                 ;Make SDA-input
+                      00142         _SCL_HIGH                               ;|
+000386 8694               M                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+000388 0000           00143         NOP                                             ;|
+00038A 0000           00144         NOP                                             ;|
+00038C 0000           00145         NOP                                             ;|
+00038E 0000           00146         NOP                                             ;|
+000390 0000           00147         NOP                                             ;|
+000392 0000           00148         NOP                                             ;|
+000394 0000           00149         NOP                                             ;|
+000396 0000           00150         NOP                                             ; > Send 9th clock and check for acknowledge fro
+                            m Slave
+000398 0000           00151         NOP                                             ;|
+00039A 0000           00152         NOP                                             ;|
+00039C 0000           00153         NOP                                             ;|
+00039E 0000           00154         NOP                                             ;|
+0003A0 0000           00155         NOP                                             ;| 
+0003A2 A882           00156         BTFSS   _SDA                    ;|
+0003A4 9209           00157         BCF             bit_in                  ;|
+                      00158         _SCL_LOW                                ;|
+0003A6 9682               M                                 BCF             _SCL                    ;
+0003A8 9694               M                                 BCF             _SCL_IO                 ;Put '0' on _SDA line
+0003AA 0000           00159         NOP                                             ;|
+0003AC 0000           00160         NOP                                             ;|
+0003AE 0012           00161         RETURN                                  ;Bit is received
+                      00162 ;----------------------------------------------------------------------------------------------
+                      00094 #include "CRC8.asm"
+                      00001 ;**********************************************************************************************
+                      00002 ;                                               CALCULATION PEC PACKET  
+                      00003 ;**********************************************************************************************
+                      00004 ;Name:          PEC_calculation
+                      00005 ;Function:      Calculates the PEC of received bytes
+                      00006 ;Input:         PEC4:PEC3:PEC2:PEC1:PEC0:PEC- data registers
+                      00007 ;                       CRC4:CRC3:CRC2:CRC1:CRC0:CRC- CRC value=00000107h
+                      00008 ;Output:        PEC
+                      00009 ;Comments:  Refer to "System Managment BUS(SMBus) specification Version 2.0"
+                      00010 ;********************************************************************************************** 
+0003B0                00011 PEC_calculation
+0003B0 0E07           00012         MOVLW   0x07    ;|
+0003B2 6E1B           00013         MOVWF   CRC             ;|      
+0003B4 0E01           00014         MOVLW   0x01    ;|
+0003B6 6E1A           00015         MOVWF   CRC0    ;|
+0003B8 6A19           00016         CLRF    CRC1    ; > Load crc value 0x0107
+0003BA 6A18           00017         CLRF    CRC2    ;|
+0003BC 6A17           00018         CLRF    CRC3    ;|
+0003BE 6A16           00019         CLRF    CRC4    ;|
+                      00020         
+                      00021         
+0003C0 0E2F           00022         MOVLW   d'47'                   ;
+0003C2 6E1C           00023         MOVWF   BitPosition             ; 6bytes*8bits=48bits(MSb=47)
+                      00024 
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 16
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00025 ;check PEC4 for '1'     
+0003C4 BE10           00026         BTFSC   PEC4,7
+0003C6 D07B           00027         BRA             shift_CRC
+0003C8 061C           00028         DECF    BitPosition
+0003CA BC10           00029         BTFSC   PEC4,6
+0003CC D078           00030         BRA             shift_CRC
+0003CE 061C           00031         DECF    BitPosition
+0003D0 BA10           00032         BTFSC   PEC4,5
+0003D2 D075           00033         BRA             shift_CRC
+0003D4 061C           00034         DECF    BitPosition
+0003D6 B810           00035         BTFSC   PEC4,4
+0003D8 D072           00036         BRA             shift_CRC
+0003DA 061C           00037         DECF    BitPosition
+0003DC B610           00038         BTFSC   PEC4,3
+0003DE D06F           00039         BRA             shift_CRC
+0003E0 061C           00040         DECF    BitPosition
+0003E2 B410           00041         BTFSC   PEC4,2
+0003E4 D06C           00042         BRA             shift_CRC
+0003E6 061C           00043         DECF    BitPosition
+0003E8 B210           00044         BTFSC   PEC4,1
+0003EA D069           00045         BRA             shift_CRC
+0003EC 061C           00046         DECF    BitPosition
+0003EE B010           00047         BTFSC   PEC4,0
+0003F0 D066           00048         BRA             shift_CRC
+                      00049         
+                      00050 ;check PEC3 for '1'
+0003F2 061C           00051         DECF    BitPosition
+0003F4 BE11           00052         BTFSC   PEC3,7
+0003F6 D063           00053         BRA             shift_CRC
+0003F8 061C           00054         DECF    BitPosition
+0003FA BC11           00055         BTFSC   PEC3,6
+0003FC D060           00056         BRA             shift_CRC
+0003FE 061C           00057         DECF    BitPosition
+000400 BA11           00058         BTFSC   PEC3,5
+000402 D05D           00059         BRA             shift_CRC
+000404 061C           00060         DECF    BitPosition
+000406 B811           00061         BTFSC   PEC3,4
+000408 D05A           00062         BRA             shift_CRC
+00040A 061C           00063         DECF    BitPosition
+00040C B611           00064         BTFSC   PEC3,3
+00040E D057           00065         BRA             shift_CRC
+000410 061C           00066         DECF    BitPosition
+000412 B411           00067         BTFSC   PEC3,2
+000414 D054           00068         BRA             shift_CRC
+000416 061C           00069         DECF    BitPosition
+000418 B211           00070         BTFSC   PEC3,1
+00041A D051           00071         BRA             shift_CRC
+00041C 061C           00072         DECF    BitPosition
+00041E B011           00073         BTFSC   PEC3,0
+000420 D04E           00074         BRA             shift_CRC
+                      00075         
+                      00076 ;check PEC2 for '1'
+000422 061C           00077         DECF    BitPosition
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 17
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+000424 BE12           00078         BTFSC   PEC2,7
+000426 D04B           00079         BRA             shift_CRC
+000428 061C           00080         DECF    BitPosition
+00042A BC12           00081         BTFSC   PEC2,6
+00042C D048           00082         BRA             shift_CRC
+00042E 061C           00083         DECF    BitPosition
+000430 BA12           00084         BTFSC   PEC2,5
+000432 D045           00085         BRA             shift_CRC
+000434 061C           00086         DECF    BitPosition
+000436 B812           00087         BTFSC   PEC2,4
+000438 D042           00088         BRA             shift_CRC
+00043A 061C           00089         DECF    BitPosition
+00043C B612           00090         BTFSC   PEC2,3
+00043E D03F           00091         BRA             shift_CRC
+000440 061C           00092         DECF    BitPosition
+000442 B412           00093         BTFSC   PEC2,2
+000444 D03C           00094         BRA             shift_CRC
+000446 061C           00095         DECF    BitPosition
+000448 B212           00096         BTFSC   PEC2,1
+00044A D039           00097         BRA             shift_CRC
+00044C 061C           00098         DECF    BitPosition
+00044E B012           00099         BTFSC   PEC2,0
+000450 D036           00100         BRA             shift_CRC
+                      00101 
+                      00102 ;check PEC1 for '1'
+000452 061C           00103         DECF    BitPosition
+000454 BE13           00104         BTFSC   PEC1,7
+000456 D033           00105         BRA             shift_CRC
+000458 061C           00106         DECF    BitPosition
+00045A BC13           00107         BTFSC   PEC1,6
+00045C D030           00108         BRA             shift_CRC
+00045E 061C           00109         DECF    BitPosition
+000460 BA13           00110         BTFSC   PEC1,5
+000462 D02D           00111         BRA             shift_CRC
+000464 061C           00112         DECF    BitPosition
+000466 B813           00113         BTFSC   PEC1,4
+000468 D02A           00114         BRA             shift_CRC
+00046A 061C           00115         DECF    BitPosition
+00046C B613           00116         BTFSC   PEC1,3
+00046E D027           00117         BRA             shift_CRC
+000470 061C           00118         DECF    BitPosition
+000472 B413           00119         BTFSC   PEC1,2
+000474 D024           00120         BRA             shift_CRC
+000476 061C           00121         DECF    BitPosition
+000478 B213           00122         BTFSC   PEC1,1
+00047A D021           00123         BRA             shift_CRC
+00047C 061C           00124         DECF    BitPosition
+00047E B013           00125         BTFSC   PEC1,0
+000480 D01E           00126         BRA             shift_CRC
+                      00127         
+                      00128 
+                      00129 ;check PEC0 for '1'
+000482 061C           00130         DECF    BitPosition
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 18
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+000484 BE14           00131         BTFSC   PEC0,7
+000486 D01B           00132         BRA             shift_CRC
+000488 061C           00133         DECF    BitPosition
+00048A BC14           00134         BTFSC   PEC0,6
+00048C D018           00135         BRA             shift_CRC
+00048E 061C           00136         DECF    BitPosition
+000490 BA14           00137         BTFSC   PEC0,5
+000492 D015           00138         BRA             shift_CRC
+000494 061C           00139         DECF    BitPosition
+000496 B814           00140         BTFSC   PEC0,4
+000498 D012           00141         BRA             shift_CRC
+00049A 061C           00142         DECF    BitPosition
+00049C B614           00143         BTFSC   PEC0,3
+00049E D00F           00144         BRA             shift_CRC
+0004A0 061C           00145         DECF    BitPosition
+0004A2 B414           00146         BTFSC   PEC0,2
+0004A4 D00C           00147         BRA             shift_CRC
+0004A6 061C           00148         DECF    BitPosition
+0004A8 B214           00149         BTFSC   PEC0,1
+0004AA D009           00150         BRA             shift_CRC
+0004AC 061C           00151         DECF    BitPosition
+0004AE B014           00152         BTFSC   PEC0,0
+0004B0 D006           00153         BRA             shift_CRC
+                      00154         
+0004B2 6A10           00155         CLRF    PEC4
+0004B4 6A11           00156         CLRF    PEC3
+0004B6 6A12           00157         CLRF    PEC2
+0004B8 6A13           00158         CLRF    PEC1
+0004BA 6A14           00159         CLRF    PEC0
+0004BC 0012           00160         RETURN
+                      00161         
+0004BE                00162 shift_CRC
+0004BE 0E08           00163         MOVLW   d'8'
+0004C0 5C1C           00164         SUBWF   BitPosition,W           ;BitPosition-8 ->W
+0004C2 6E1D           00165         MOVWF   shift                           ;get shift value for CRC registers
+0004C4 90D8           00166         BCF             STATUS,C
+                      00167         
+0004C6                00168 shift_loop
+0004C6 521D           00169         MOVF    shift,F                         ;read shift to force flag Z
+0004C8 E008           00170         BZ              xor
+0004CA 361B           00171         RLCF    CRC,F
+0004CC 361A           00172         RLCF    CRC0,F
+0004CE 3619           00173         RLCF    CRC1,F
+0004D0 3618           00174         RLCF    CRC2,F
+0004D2 3617           00175         RLCF    CRC3,F
+0004D4 3616           00176         RLCF    CRC4,F
+0004D6 2E1D           00177         DECFSZ  shift,F
+0004D8 D7F6           00178         BRA             shift_loop
+                      00179         
+0004DA                00180 xor 
+0004DA 5016           00181         MOVF    CRC4,W
+0004DC 1A10           00182         XORWF   PEC4,F
+0004DE 5017           00183         MOVF    CRC3,W
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 19
+
+SMBus Comunication Subroutines
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0004E0 1A11           00184         XORWF   PEC3,F
+0004E2 5018           00185         MOVF    CRC2,W
+0004E4 1A12           00186         XORWF   PEC2,F
+0004E6 5019           00187         MOVF    CRC1,W
+0004E8 1A13           00188         XORWF   PEC1,F
+0004EA 501A           00189         MOVF    CRC0,W
+0004EC 1A14           00190         XORWF   PEC0,F
+0004EE 501B           00191         MOVF    CRC,W
+0004F0 1A15           00192         XORWF   PEC,F
+0004F2 D75E           00193         BRA             PEC_calculation
+                      00095 #include "MCUinit.asm"
+                      00001 ;----------------------------------------------------------------------------------------------         
+                                                    
+                      00002                                                 SUBTITLE "PIC18F4320 initialization"
+                      00003 ;----------------------------------------------------------------------------------------------         
+                                            
+0004F4                00004 MCUinit
+                      00005 ;Set all I/O as digital
+0004F4 0E0F           00006         MOVLW   B'00001111'
+0004F6 6EC1           00007         MOVWF   ADCON1                  ; All channels are digital I/O
+                      00008 ;---------------------------------------------------------------------------------------------- 
+                      00009 ;SMBus_init      
+                      00010         _SCL_HIGH                               ; The bus is in idle state
+0004F8 8694               M                                 BSF             _SCL_IO                 ;_SCL-input,_SCL line is high fr
+                            om pull up
+                      00011         _SDA_HIGH                               ; SDA and SCL are in high level from pull up resistors
+0004FA 8894               M                                 BSF             _SDA_IO                 ;_SDA-input,_SDA line is high fr
+                            om pull up
+                      00012 ;----------------------------------------------------------------------------------------------
+                      00013 
+0004FC 0012           00014         RETURN
+                      00096 #include "delay.asm"
+                      00001 ;*******************************************************************************************************
+                            *****
+                      00002 ;                                                                               TUNABLE DELAY   
+                      00003 ;*******************************************************************************************************
+                            *****
+                      00004 ;Name:          delay
+                      00005 ;Function:      Produces time delay depending on the value in counterL
+                      00006 ;Input:         WREG
+                      00007 ;Output:        No
+                      00008 ;Comments:  Used in START _bit and STOP_bit subroutines to meet SMBus timing 
+                      00009 ;               requirements.
+                      00010 ;               Refer to "System Management BUS(SMBus) specification Version 2.0" and
+                      00011 ;               AN ”SMBus communication with MLX90614”          
+                      00012 ;*******************************************************************************************************
+                            *****
+0004FE                00013 delay   
+0004FE 6E05           00014         MOVWF   counterL        ;WREG -> counterL
+000500 2E05           00015         DECFSZ  counterL,f      ;If (counerL=counterL-1) =0 go out
+000502 D7FE           00016         BRA             $-2                     ;else decrement counterL again  
+000504 0012           00017         RETURN                          ;End of “delay”
+                      00018 
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 20
+
+PIC18F4320 initialization
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00019 ;*******************************************************************************************************
+                            *****
+                      00020 ;                                                                       FIXED   DELAY 50ms@Fosc=11.0592M
+                            Hz      
+                      00021 ;************************************************************************************************
+                      00022 ;Name:          delay_50ms 
+                      00023 ;Function:      Produces time delay 50ms
+                      00024 ;Input:         No
+                      00025 ;Output:        No
+                      00026 ;Comments:   
+                      00027 ;*******************************************************************************************************
+                            *****
+000506                00028 delay_50ms                              ;Fcpu=11.0592MHz
+000506 0E07           00029         MOVLW   d'7'
+000508 6E03           00030         MOVWF   counterU
+                      00031 
+00050A 0E1A           00032         MOVLW   d'26'
+00050C 6E04           00033         MOVWF   counterH
+                      00034 
+00050E 0EFC           00035         MOVLW   d'252'
+000510 6E05           00036         MOVWF   counterL
+                      00037         
+000512 2E05           00038         DECFSZ  counterL,F
+000514 D7FE           00039         BRA             $-2
+000516 2E04           00040         DECFSZ  counterH,F
+000518 D7FA           00041         BRA             $-d'10'
+00051A 2E03           00042         DECFSZ  counterU,F
+00051C D7F6           00043         BRA             $-d'18'
+                      00044         
+00051E 0012           00045         RETURN
+                      00046 
+                      00047 ;*******************************************************************************************************
+                            *****
+                      00048 ;                                                                       FIXED   DELAY 200ms@Fosc=11.0592
+                            MHz     
+                      00049 ;************************************************************************************************
+                      00050 ;Name:          delay_200ms 
+                      00051 ;Function:      Produces time delay 200ms
+                      00052 ;Input:         No
+                      00053 ;Output:        No
+                      00054 ;Comments:   
+                      00055 ;*******************************************************************************************************
+                            *****
+000520                00056 delay_200ms                             ;Fcpu=11.0592MHz
+000520 0E1C           00057         MOVLW   d'28'
+000522 6E03           00058         MOVWF   counterU
+                      00059 
+000524 0E1A           00060         MOVLW   d'26'
+000526 6E04           00061         MOVWF   counterH
+                      00062 
+000528 0EFC           00063         MOVLW   d'252'
+00052A 6E05           00064         MOVWF   counterL
+                      00065         
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 21
+
+PIC18F4320 initialization
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00052C 2E05           00066         DECFSZ  counterL,F
+00052E D7FE           00067         BRA             $-2
+000530 2E04           00068         DECFSZ  counterH,F
+000532 D7FA           00069         BRA             $-d'10'
+000534 2E03           00070         DECFSZ  counterU,F
+000536 D7F6           00071         BRA             $-d'18'
+                      00072         
+000538 0012           00073         RETURN
+                      00074 ;----------------------------------------------------------------------------------------------
+                      00097 ;**********************************************************************************************
+                      00098 ;                                                                                               MAIN
+                      00099 ;**********************************************************************************************
+00053A                00100 MAIN
+00053A EC7A F002      00101         CALL    MCUinit                                 ; MCU initialization
+                      00102         
+00053E 0E00           00103         MOVLW   SA<<1                                   ; Put SA in the upper 7 bits 
+000540 6E0D           00104         MOVWF   SlaveAddress                    ; Set SMBus Address                             
+000542 0E07           00105         MOVLW   RAM_Tobj1|RAM_Access    ; Form RAM access command + RAM address
+000544 6E0E           00106         MOVWF   command                                 ; Load the command register
+                      00107         
+000546 EC90 F002      00108         CALL    delay_200ms                             ; Wait after POR,Tvalid=0.15s
+                      00109                                                                         ; See the datasheet of MLX90614 
+00054A                00110 ReadLoop
+                      00111     
+00054A EC1B F001      00112         CALL    MemRead                                 ; Read RAM address
+00054E EC90 F002      00113         CALL    delay_200ms                             ;|
+000552 EC90 F002      00114         CALL    delay_200ms                             ; > Wait before next measurement
+000556 EC90 F002      00115         CALL    delay_200ms                             ;| 
+00055A D7F7           00116         BRA             ReadLoop                                ; Read again
+                      00117 
+                      00118         END
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 22
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+A                                 00000000
+ACCESS                            00000000
+ACKDT                             00000005
+ACKEN                             00000004
+ACKSTAT                           00000006
+ACQT0                             00000003
+ACQT1                             00000004
+ACQT2                             00000005
+ADCON0                            00000FC2
+ADCON1                            00000FC1
+ADCON2                            00000FC0
+ADCS0                             00000000
+ADCS1                             00000001
+ADCS2                             00000002
+ADDEN                             00000003
+ADFM                              00000007
+ADIE                              00000006
+ADIF                              00000006
+ADIP                              00000006
+ADON                              00000000
+ADRES                             ADRESH
+ADRESH                            00000FC4
+ADRESL                            00000FC3
+AN0                               00000000
+AN1                               00000001
+AN10                              00000001
+AN11                              00000004
+AN12                              00000000
+AN2                               00000002
+AN3                               00000003
+AN4                               00000005
+AN5                               00000000
+AN6                               00000001
+AN7                               00000002
+AN8                               00000002
+AN9                               00000003
+BANKED                            00000001
+BCLIE                             00000003
+BCLIF                             00000003
+BCLIP                             00000003
+BF                                00000000
+BOR                               00000000
+BRGH                              00000002
+BSR                               00000FE0
+BSR_temp                          00000002
+BitPosition                       0000001C
+Bit_counter                       00000007
+C                                 00000000
+C1INV                             00000004
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1                              00000002
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 23
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+CCP1CON                           00000FBD
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1IP                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             DC1B1
+CCP1Y                             DC1B0
+CCP2                              00000001
+CCP2A                             00000003
+CCP2CON                           00000FBA
+CCP2IE                            00000000
+CCP2IF                            00000000
+CCP2IP                            00000000
+CCP2M0                            00000000
+CCP2M1                            00000001
+CCP2M2                            00000002
+CCP2M3                            00000003
+CCP2X                             DC2B1
+CCP2Y                             DC2B0
+CCPR1H                            00000FBF
+CCPR1L                            00000FBE
+CCPR2H                            00000FBC
+CCPR2L                            00000FBB
+CFGS                              00000006
+CHS0                              00000002
+CHS1                              00000003
+CHS2                              00000004
+CHS3                              00000005
+CIS                               00000003
+CK                                00000006
+CKE                               00000006
+CKP                               00000004
+CLKI                              00000007
+CLKO                              00000006
+CM0                               00000000
+CM1                               00000001
+CM2                               00000002
+CMCON                             00000FB4
+CMIE                              00000006
+CMIF                              00000006
+CMIP                              00000006
+CRC                               0000001B
+CRC0                              0000001A
+CRC1                              00000019
+CRC2                              00000018
+CRC3                              00000017
+CRC4                              00000016
+CREN                              00000004
+CS                                00000002
+CSRC                              00000007
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 24
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+CVR0                              00000000
+CVR1                              00000001
+CVR2                              00000002
+CVR3                              00000003
+CVRCON                            00000FB5
+CVREN                             00000007
+CVROE                             00000006
+CVRR                              00000005
+D                                 00000005
+DATA_ADDRESS                      00000005
+DC                                00000001
+DC1B0                             00000004
+DC1B1                             00000005
+DC2B0                             00000004
+DC2B1                             00000005
+DDRA                              TRISA
+DDRB                              TRISB
+DDRC                              TRISC
+DDRD                              TRISD
+DDRE                              TRISE
+DEFAULT_SA                        0x5A
+DONE                              00000001
+D_A                               00000005
+DataH                             0000000B
+DataL                             0000000A
+ECCPAS                            00000FB6
+ECCPAS0                           00000004
+ECCPAS1                           00000005
+ECCPAS2                           00000006
+ECCPASE                           00000007
+EEADR                             00000FA9
+EECON1                            00000FA6
+EECON2                            00000FA7
+EEDATA                            00000FA8
+EEIE                              00000004
+EEIF                              00000004
+EEIP                              00000004
+EEPGD                             00000007
+FAST                              00000001
+FERR                              00000002
+FLTS                              00000002
+FREE                              00000004
+FSR0                              00000000
+FSR0H                             00000FEA
+FSR0L                             00000FE9
+FSR1                              00000001
+FSR1H                             00000FE2
+FSR1L                             00000FE1
+FSR2                              00000002
+FSR2H                             00000FDA
+FSR2L                             00000FD9
+GCEN                              00000007
+GIE                               00000007
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 25
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+GIEH                              00000007
+GIEL                              00000006
+GO                                00000001
+GO_DONE                           00000001
+I2C_DAT                           00000005
+I2C_READ                          00000002
+I2C_START                         00000003
+I2C_STOP                          00000004
+IBF                               00000007
+IBOV                              00000005
+IDLEN                             00000007
+INDF0                             00000FEF
+INDF1                             00000FE7
+INDF2                             00000FDF
+INT0                              00000000
+INT0IE                            00000004
+INT0IF                            00000001
+INT1                              00000001
+INT1IE                            00000003
+INT1IF                            00000000
+INT1IP                            00000006
+INT2                              00000002
+INT2IE                            00000004
+INT2IF                            00000001
+INT2IP                            00000007
+INTCON                            00000FF2
+INTCON2                           00000FF1
+INTCON3                           00000FF0
+INTE                              INT0IE
+INTEDG0                           00000006
+INTEDG1                           00000005
+INTEDG2                           00000004
+INTF                              INT0IF
+IOFS                              00000002
+IPEN                              00000007
+IPR1                              00000F9F
+IPR2                              00000FA2
+IRCF0                             00000004
+IRCF1                             00000005
+IRCF2                             00000006
+IRVST                             00000005
+LATA                              00000F89
+LATB                              00000F8A
+LATC                              00000F8B
+LATD                              00000F8C
+LATE                              00000F8D
+LVDCON                            00000FD2
+LVDEN                             00000004
+LVDIE                             00000002
+LVDIF                             00000002
+LVDIN                             00000005
+LVDIP                             00000002
+LVDL0                             00000000
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 26
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+LVDL1                             00000001
+LVDL2                             00000002
+LVDL3                             00000003
+LoadNACKcounter                   
+MAIN                              0000053A
+MCLR                              00000003
+MCUinit                           000004F4
+MemRead                           00000236
+N                                 00000004
+NOT_A                             00000005
+NOT_ADDRESS                       00000005
+NOT_BOR                           00000000
+NOT_DONE                          00000001
+NOT_PD                            00000002
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_RI                            00000004
+NOT_T1SYNC                        00000002
+NOT_T3SYNC                        00000002
+NOT_TO                            00000003
+NOT_W                             00000002
+NOT_WRITE                         00000002
+Nack_Counter                      0000000F
+OBF                               00000006
+OERR                              00000001
+OSC1                              00000007
+OSC2                              00000006
+OSCCON                            00000FD3
+OSCFIE                            00000007
+OSCFIF                            00000007
+OSCFIP                            00000007
+OSCTUNE                           00000F9B
+OSTS                              00000003
+OV                                00000003
+P                                 00000004
+P1A                               00000002
+P1B                               00000005
+P1C                               00000006
+P1D                               00000007
+P1M0                              00000006
+P1M1                              00000007
+PCFG0                             00000000
+PCFG1                             00000001
+PCFG2                             00000002
+PCFG3                             00000003
+PCL                               00000FF9
+PCLATH                            00000FFA
+PCLATU                            00000FFB
+PD                                00000002
+PDC0                              00000000
+PDC1                              00000001
+PDC2                              00000002
+PDC3                              00000003
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 27
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PDC4                              00000004
+PDC5                              00000005
+PDC6                              00000006
+PEC                               00000015
+PEC0                              00000014
+PEC1                              00000013
+PEC2                              00000012
+PEC3                              00000011
+PEC4                              00000010
+PEC_calculation                   000003B0
+PEIE                              00000006
+PEN                               00000002
+PIE1                              00000F9D
+PIE2                              00000FA0
+PIR1                              00000F9E
+PIR2                              00000FA1
+PLUSW0                            00000FEB
+PLUSW1                            00000FE3
+PLUSW2                            00000FDB
+POR                               00000001
+PORTA                             00000F80
+PORTB                             00000F81
+PORTC                             00000F82
+PORTD                             00000F83
+PORTE                             00000F84
+POSTDEC0                          00000FED
+POSTDEC1                          00000FE5
+POSTDEC2                          00000FDD
+POSTINC0                          00000FEE
+POSTINC1                          00000FE6
+POSTINC2                          00000FDE
+PR2                               00000FCB
+PREINC0                           00000FEC
+PREINC1                           00000FE4
+PREINC2                           00000FDC
+PRODH                             00000FF4
+PRODL                             00000FF3
+PRSEN                             00000007
+PSA                               00000003
+PSP0                              00000000
+PSP1                              00000001
+PSP2                              00000002
+PSP3                              00000003
+PSP4                              00000004
+PSP5                              00000005
+PSP6                              00000006
+PSP7                              00000007
+PSPIE                             00000007
+PSPIF                             00000007
+PSPIP                             00000007
+PSPMODE                           00000004
+PSSAC0                            00000002
+PSSAC1                            00000003
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 28
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PSSBD0                            00000000
+PSSBD1                            00000001
+PWM1CON                           00000FB7
+PecReg                            0000000C
+R                                 00000002
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RA6                               00000006
+RA7                               00000007
+RAM_Access                        0x00
+RAM_Tobj1                         0x07
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RBIP                              00000000
+RBPU                              00000007
+RC0                               00000000
+RC1                               00000001
+RC2                               00000002
+RC3                               00000003
+RC4                               00000004
+RC5                               00000005
+RC6                               00000006
+RC7                               00000007
+RCEN                              00000003
+RCIE                              00000005
+RCIF                              00000005
+RCIP                              00000005
+RCON                              00000FD0
+RCREG                             00000FAE
+RCSTA                             00000FAB
+RD                                00000000
+RD0                               00000000
+RD1                               00000001
+RD16                              00000007
+RD2                               00000002
+RD3                               00000003
+RD4                               00000004
+RD5                               00000005
+RD6                               00000006
+RD7                               00000007
+RE0                               00000000
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 29
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+RE1                               00000001
+RE2                               00000002
+RE3                               00000003
+READ_WRITE                        00000002
+RI                                00000004
+RSEN                              00000001
+RX                                00000007
+RX9                               00000006
+RX9D                              00000000
+RX_again                          0000036C
+RX_buffer                         00000008
+RX_byte                           00000364
+R_W                               00000002
+ReadLoop                          0000054A
+Receive_bit                       00000382
+S                                 00000003
+SA                                0x00
+SCK                               00000003
+SCL                               00000003
+SCS                               SCS0
+SCS0                              00000000
+SCS1                              00000001
+SDA                               00000004
+SDI                               00000004
+SDO                               00000005
+SEN                               00000000
+SMP                               00000007
+SPBRG                             00000FAF
+SPEN                              00000007
+SREN                              00000005
+SS                                00000005
+SSPADD                            00000FC8
+SSPBUF                            00000FC9
+SSPCON1                           00000FC6
+SSPCON2                           00000FC5
+SSPEN                             00000005
+SSPIE                             00000003
+SSPIF                             00000003
+SSPIP                             00000003
+SSPM0                             00000000
+SSPM1                             00000001
+SSPM2                             00000002
+SSPM3                             00000003
+SSPOV                             00000006
+SSPSTAT                           00000FC7
+START_bit                         000002C4
+STATUS                            00000FD8
+STATUS_temp                       00000001
+STKFUL                            00000007
+STKPTR                            00000FFC
+STKUNF                            00000006
+STOP_bit                          000002EA
+SWDTEN                            00000000
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 30
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+SYNC                              00000004
+Send_bit                          0000032C
+SlaveAddress                      0000000D
+T08BIT                            00000006
+T0CKI                             00000004
+T0CON                             00000FD5
+T0CS                              00000005
+T0IP                              00000002
+T0PS0                             00000000
+T0PS1                             00000001
+T0PS2                             00000002
+T0SE                              00000004
+T1CKI                             00000000
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000FCD
+T1OSCEN                           00000003
+T1OSI                             00000001
+T1OSO                             00000000
+T1RUN                             00000006
+T1SYNC                            00000002
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000FCA
+T3CCP1                            00000003
+T3CCP2                            00000006
+T3CKPS0                           00000004
+T3CKPS1                           00000005
+T3CON                             00000FB1
+T3SYNC                            00000002
+TABLAT                            00000FF5
+TBLPTRH                           00000FF7
+TBLPTRL                           00000FF6
+TBLPTRU                           00000FF8
+TBUF                              d'5'
+TMR0H                             00000FD7
+TMR0IE                            00000005
+TMR0IF                            00000002
+TMR0IP                            00000002
+TMR0L                             00000FD6
+TMR0ON                            00000007
+TMR1CS                            00000001
+TMR1H                             00000FCF
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1IP                            00000000
+TMR1L                             00000FCE
+TMR1ON                            00000000
+TMR2                              00000FCC
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2IP                            00000001
+TMR2ON                            00000002
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 31
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TMR3CS                            00000001
+TMR3H                             00000FB3
+TMR3IE                            00000001
+TMR3IF                            00000001
+TMR3IP                            00000001
+TMR3L                             00000FB2
+TMR3ON                            00000000
+TO                                00000003
+TOSH                              00000FFE
+TOSL                              00000FFD
+TOSU                              00000FFF
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000F92
+TRISB                             00000F93
+TRISC                             00000F94
+TRISD                             00000F95
+TRISE                             00000F96
+TRMT                              00000001
+TUN0                              00000000
+TUN1                              00000001
+TUN2                              00000002
+TUN3                              00000003
+TUN4                              00000004
+TUN5                              00000005
+TX                                00000006
+TX9                               00000006
+TX9D                              00000000
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXIP                              00000004
+TXREG                             00000FAD
+TXSTA                             00000FAC
+TX_buffer                         00000006
+TX_byte                           0000030A
+TYPE_BOOTLOAD                     00000002
+TYPE_PICSTART                     00000001
+UA                                00000001
+VCFG0                             00000004
+VCFG1                             00000005
+VREFM                             00000002
+VREFP                             00000003
+W                                 00000000
+WCOL                              00000007
+WDTCON                            00000FD1
+WR                                00000001
+WREG                              00000FE8
+WREG_temp                         00000000
+WREN                              00000002
+WRERR                             00000003
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 32
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+Z                                 00000002
+_BORV_20_2L                       000000FF
+_BORV_27_2L                       000000FB
+_BORV_42_2L                       000000F7
+_BORV_45_2L                       000000F3
+_BOR_OFF_2L                       000000FD
+_BOR_ON_2L                        000000FF
+_CCP2MX_B3_3H                     000000FE
+_CCP2MX_C1_3H                     000000FF
+_CCP2MX_OFF_3H                    000000FE
+_CCP2MX_ON_3H                     000000FF
+_CONFIG1H                         00300001
+_CONFIG2H                         00300003
+_CONFIG2L                         00300002
+_CONFIG3H                         00300005
+_CONFIG4L                         00300006
+_CONFIG5H                         00300009
+_CONFIG5L                         00300008
+_CONFIG6H                         0030000B
+_CONFIG6L                         0030000A
+_CONFIG7H                         0030000D
+_CONFIG7L                         0030000C
+_CP0_OFF_5L                       000000FF
+_CP0_ON_5L                        000000FE
+_CP1_OFF_5L                       000000FF
+_CP1_ON_5L                        000000FD
+_CP2_OFF_5L                       000000FF
+_CP2_ON_5L                        000000FB
+_CP3_OFF_5L                       000000FF
+_CP3_ON_5L                        000000F7
+_CPB_OFF_5H                       000000FF
+_CPB_ON_5H                        000000BF
+_CPD_OFF_5H                       000000FF
+_CPD_ON_5H                        0000007F
+_DEBUG_OFF_4L                     000000FF
+_DEBUG_ON_4L                      0000007F
+_DEVID1                           003FFFFE
+_DEVID2                           003FFFFF
+_EBTR0_OFF_7L                     000000FF
+_EBTR0_ON_7L                      000000FE
+_EBTR1_OFF_7L                     000000FF
+_EBTR1_ON_7L                      000000FD
+_EBTR2_OFF_7L                     000000FF
+_EBTR2_ON_7L                      000000FB
+_EBTR3_OFF_7L                     000000FF
+_EBTR3_ON_7L                      000000F7
+_EBTRB_OFF_7H                     000000FF
+_EBTRB_ON_7H                      000000BF
+_ECIO_OSC_1H                      000000F5
+_EC_OSC_1H                        000000F4
+_FSCM_OFF_1H                      000000BF
+_FSCM_ON_1H                       000000FF
+_HSPLL_OSC_1H                     000000F6
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 33
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_HS_OSC_1H                        000000F2
+_IDLOC0                           00200000
+_IDLOC1                           00200001
+_IDLOC2                           00200002
+_IDLOC3                           00200003
+_IDLOC4                           00200004
+_IDLOC5                           00200005
+_IDLOC6                           00200006
+_IDLOC7                           00200007
+_IESO_OFF_1H                      0000007F
+_IESO_ON_1H                       000000FF
+_INTIO1_OSC_1H                    000000F9
+_INTIO2_OSC_1H                    000000F8
+_LP_OSC_1H                        000000F0
+_LVP_OFF_4L                       000000FB
+_LVP_ON_4L                        000000FF
+_MCLRE_OFF_3H                     0000007F
+_MCLRE_ON_3H                      000000FF
+_PBAD_ANA_3H                      000000FF
+_PBAD_DIG_3H                      000000FD
+_PWRT_OFF_2L                      000000FF
+_PWRT_ON_2L                       000000FE
+_RCIO_OSC_1H                      000000F7
+_RC_OSC_1H                        000000FF
+_SCL                              PORTC,3
+_SCL_HIGH                         
+_SCL_IO                           TRISC,3
+_SCL_LOW                          
+_SDA                              PORTC,4
+_SDA_HIGH                         
+_SDA_IO                           TRISC,4
+_SDA_LOW                          
+_STVR_OFF_4L                      000000FE
+_STVR_ON_4L                       000000FF
+_WDTPS_128_2H                     000000EF
+_WDTPS_16K_2H                     000000FD
+_WDTPS_16_2H                      000000E9
+_WDTPS_1K_2H                      000000F5
+_WDTPS_1_2H                       000000E1
+_WDTPS_256_2H                     000000F1
+_WDTPS_2K_2H                      000000F7
+_WDTPS_2_2H                       000000E3
+_WDTPS_32K_2H                     000000FF
+_WDTPS_32_2H                      000000EB
+_WDTPS_4K_2H                      000000F9
+_WDTPS_4_2H                       000000E5
+_WDTPS_512_2H                     000000F3
+_WDTPS_64_2H                      000000ED
+_WDTPS_8K_2H                      000000FB
+_WDTPS_8_2H                       000000E7
+_WDT_OFF_2H                       000000FE
+_WDT_ON_2H                        000000FF
+_WRT0_OFF_6L                      000000FF
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 34
+
+PIC18F4320 initialization
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_WRT0_ON_6L                       000000FE
+_WRT1_OFF_6L                      000000FF
+_WRT1_ON_6L                       000000FD
+_WRT2_OFF_6L                      000000FF
+_WRT2_ON_6L                       000000FB
+_WRT3_OFF_6L                      000000FF
+_WRT3_ON_6L                       000000F7
+_WRTB_OFF_6H                      000000FF
+_WRTB_ON_6H                       000000BF
+_WRTC_OFF_6H                      000000FF
+_WRTC_ON_6H                       000000DF
+_WRTD_OFF_6H                      000000FF
+_WRTD_ON_6H                       0000007F
+_XT_OSC_1H                        000000F1
+__18F4320                         00000001
+bit_high                          0000033A
+bit_in                            flagreg0,1
+bit_out                           flagreg0,0
+clock                             0000033E
+command                           0000000E
+counterH                          00000004
+counterL                          00000005
+counterU                          00000003
+delay                             000004FE
+delay_200ms                       00000520
+delay_50ms                        00000506
+flagreg0                          00000009
+isr_high                          0000021C
+isr_low                           0000021E
+isr_low_end                       0000022A
+restart                           0000023A
+shift                             0000001D
+shift_CRC                         000004BE
+shift_loop                        000004C6
+start                             00000244
+tx_loop                           00000310
+type_prog                         00000002
+xor                               000004DA
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+0000 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0040 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+MPASM  5.06                          MAIN.ASM   10-15-2007  15:18:54         PAGE 35
+
+PIC18F4320 initialization
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+
+0100 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0140 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0180 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+01C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0200 : XXXX----XXXX---- --------XXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0240 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0280 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+02C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0300 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0340 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0380 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+03C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0400 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0440 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0480 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+04C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0500 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0540 : XXXXXXXXXXXXXXXX XXXXXXXXXXXX---- ---------------- ----------------
+0000 : -XXX-XX-XXXXXX-- ---------------- ---------------- ----------------
+00C0 : ---------------- ---------------- ---------------- --------------XX
+
+All other memory blocks unused.
+
+Program Memory Bytes Used:  1369
+Program Memory Bytes Free:  6823
+
+
+Errors   :     0
+Warnings :     0 reported,     0 suppressed
+Messages :     0 reported,     0 suppressed
+
+
